@@ -591,6 +591,38 @@ void DiskDFJK::initialize_JK_core() {
         }
     }
     timer_off("JK: (A|mn)");
+    
+    timer_on("SL: Saving AO");
+
+    if (df_ints_io_ == "SAVE") {
+        outfile->Printf("Shuhang Li test: Saving AO basis DF tensor in unit %d \n", unit_);
+        psio_->open(unit_, PSIO_OPEN_NEW);
+        psio_->write_entry(unit_, "(A|mn) Integrals", (char*)Qmnp[0], sizeof(double) * n_function_pairs_ * auxiliary_->nbf());
+        psio_->close(unit_, 1);
+    }
+
+    timer_off("SL: Saving AO");
+
+    // Shuhang Li test: Fitting full inverse metric
+    timer_on("SL_JK: (A|Q)^-1");
+
+    auto Jinv_full = std::make_shared<FittingMetric>(auxiliary_, true);
+    Jinv_full->form_full_eig_inverse(condition_);
+    double** Jinv_fullp = Jinv_full->get_metric()->pointer();
+
+    timer_off("SL_JK: (A|Q)^-1");
+
+    // Save inverse metric to the SCF three-index integral file if it exists
+    timer_on("SL: Saving full inverse metric");
+
+    if (df_ints_io_ == "SAVE") {
+        outfile->Printf("Shuhang Li test: Saving full inverse metric in unit %d \n", unit_);
+        psio_->open(unit_, PSIO_OPEN_OLD);
+        psio_->write_entry(unit_, "Jinv_full", (char*)Jinv_fullp[0], sizeof(double) * auxiliary_->nbf() * auxiliary_->nbf());
+        psio_->close(unit_, 1);
+    }
+
+    timer_off("SL: Saving full inverse metric");
 
     timer_on("JK: (A|Q)^-1/2");
 
@@ -632,7 +664,7 @@ void DiskDFJK::initialize_JK_core() {
     // Qmn_->print();
 
     if (df_ints_io_ == "SAVE") {
-        psio_->open(unit_, PSIO_OPEN_NEW);
+        psio_->open(unit_, PSIO_OPEN_OLD);
         psio_->write_entry(unit_, "(Q|mn) Integrals", (char*)Qmnp[0], sizeof(double) * n_function_pairs_ * auxiliary_->nbf());
         psio_->close(unit_, 1);
     }
@@ -841,7 +873,7 @@ void DiskDFJK::initialize_JK_disk() {
 
     // ==> Prestripe/Jinv <== //
 
-    timer_on("JK: (A|Q)^-1");
+    timer_on("JK: (A|Q)^-1/2");
 
     psio_->open(unit_, PSIO_OPEN_NEW);
     auto aio = std::make_shared<AIOHandler>(psio_);
@@ -857,7 +889,24 @@ void DiskDFJK::initialize_JK_disk() {
     // Synch up
     aio->synchronize();
 
-    timer_off("JK: (A|Q)^-1");
+    timer_off("JK: (A|Q)^-1/2");
+
+    // Shuhang Li test: Fitting full inverse metric
+    timer_on("SL_JK (in disk): (A|Q)^-1");
+
+    auto Jinv_full = std::make_shared<FittingMetric>(auxiliary_, true);
+    Jinv_full->form_full_eig_inverse(condition_);
+    double** Jinv_fullp = Jinv_full->get_metric()->pointer();
+
+    timer_off("SL_JK (in disk): (A|Q)^-1");
+
+    // Save inverse metric to the SCF three-index integral file if it exists
+    timer_on("SL(in disk): Saving full inverse metric");
+
+    outfile->Printf("Shuhang Li test: Saving full inverse metric in unit %d (in disk, not in core) \n", unit_);
+    psio_->write_entry(unit_, "Jinv_full", (char*)Jinv_fullp[0], sizeof(double) * auxiliary_->nbf() * auxiliary_->nbf());
+
+    timer_off("SL(in disk): Saving full inverse metric");
 
     // ==> Thread setup <== //
     int nthread = 1;
@@ -914,6 +963,17 @@ void DiskDFJK::initialize_JK_disk() {
 
         timer_off("JK: (A|mn)");
 
+        timer_on("SL_Disk: Saving AO");
+
+        outfile->Printf("Shuhang Li test: Saving AO basis DF tensor in unit %d (in disk, not in core) \n", unit_);
+        psio_address addr;
+        for (int Q = 0; Q < naux; Q++) {
+            addr = psio_get_address(PSIO_ZERO, (Q * (size_t)n_function_pairs_ + mn_start_val) * sizeof(double));
+            psio_->write(unit_, "(A|mn) Integrals", (char*)Qmnp[Q], mn_col_val * sizeof(double), addr, &addr);
+        }
+
+        timer_off("SL_Disk: Saving AO");
+
         // ==> (Q|mn) fitting <== //
 
         timer_on("JK: (Q|mn)");
@@ -933,7 +993,7 @@ void DiskDFJK::initialize_JK_disk() {
 
         timer_on("JK: (Q|mn) Write");
 
-        psio_address addr;
+        // psio_address addr;
         for (int Q = 0; Q < naux; Q++) {
             addr = psio_get_address(PSIO_ZERO, (Q * (size_t)n_function_pairs_ + mn_start_val) * sizeof(double));
             psio_->write(unit_, "(Q|mn) Integrals", (char*)Qmnp[Q], mn_col_val * sizeof(double), addr, &addr);
