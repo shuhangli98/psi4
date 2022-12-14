@@ -415,8 +415,8 @@ std::shared_ptr<Wavefunction> Wavefunction::c1_deep_copy(std::shared_ptr<BasisSe
     wfn->H_ = wfn->factory_->create_shared_matrix("One-electron Hamiltonian");
     wfn->H_->remove_symmetry(H_, SO2AO);
 
-    /* This stuff we need to copy in the subclass functions, b/c
-    ** constructors like RHF() just blow these away anyway
+    // This stuff we need to copy in the subclass functions, b/c
+    //** constructors like RHF() just blow these away anyway
     if (Ca_) wfn->Ca_ = Ca_subset("AO", "ALL");
     if (Cb_) wfn->Cb_ = Cb_subset("AO", "ALL");
     if (Da_) wfn->Da_ = Da_subset("AO");
@@ -427,7 +427,7 @@ std::shared_ptr<Wavefunction> Wavefunction::c1_deep_copy(std::shared_ptr<BasisSe
         epsilon_subset_helper(epsilon_a_, nsopi_, "AO", "ALL");
     if (epsilon_b_) wfn->epsilon_b_ =
         epsilon_subset_helper(epsilon_b_, nsopi_, "AO", "ALL");
-    */
+    
 
     // these are simple SharedMatrices of size 3*natom_, etc., so should
     // not depend on symmetry ... can just copy them

@@ -318,6 +318,255 @@ void FittingMetric::form_fitting_metric() {
         }
     }
 }
+
+void FittingMetric::form_erfc_fitting_metric() {
+    is_inverted_ = false;
+    algorithm_ = "NONE";
+
+    // Sizing/symmetry indexing
+    auto auxfact = std::make_shared<IntegralFactory>(aux_, aux_, aux_, aux_);
+    auto auxpet = std::make_shared<PetiteList>(aux_, auxfact);
+    std::shared_ptr<IntegralFactory> poisfact;
+    std::shared_ptr<PetiteList> poispet;
+    if (is_poisson_) {
+        poisfact = std::make_shared<IntegralFactory>(pois_, pois_, pois_, pois_);
+        poispet = std::make_shared<PetiteList>(pois_, poisfact);
+    }
+
+    int naux = 0;
+    int ngaussian = 0;
+    int npoisson = 0;
+    Dimension nauxpi(auxpet->nirrep(), "Fitting Metric Dimensions");
+    for (int h = 0; h < auxpet->nirrep(); h++) {
+        naux += auxpet->SO_basisdim()[h];
+        ngaussian += auxpet->SO_basisdim()[h];
+        nauxpi[h] = auxpet->SO_basisdim()[h];
+        if (is_poisson_) {
+            naux += poispet->SO_basisdim()[h];
+            npoisson += poispet->SO_basisdim()[h];
+            nauxpi[h] += poispet->SO_basisdim()[h];
+        }
+    }
+    Dimension ngauspi = auxpet->SO_basisdim();
+
+    // Build the full DF/Poisson matrix in the AO basis first
+    auto AOmetric = std::make_shared<Matrix>("AO Basis DF Metric", naux, naux);
+    double** W = AOmetric->pointer(0);
+    std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
+
+    // Only thread if not already in parallel (handy for local fitting)
+    int nthread = 1;
+#ifdef _OPENMP
+    if (!omp_in_parallel()) {
+        nthread = Process::environment.get_n_threads();
+    }
+#endif
+
+    // == (A|B) Block == //
+    IntegralFactory rifactory_J(aux_, zero, aux_, zero);
+    std::vector<const double*> Jbuffer(nthread);  
+    std::vector<std::shared_ptr<TwoBodyAOInt>> Jint(nthread);
+
+    /// SL test: Use omega = 0.1 for LT-DSRG test in forte.
+    for (int Q = 0; Q < nthread; Q++) {     
+        Jint[Q] = std::shared_ptr<TwoBodyAOInt>(rifactory_J.erf_complement_eri(0.1));
+    }
+
+#pragma omp parallel for schedule(dynamic) num_threads(nthread)
+    for (int MU = 0; MU < aux_->nshell(); ++MU) {
+        int nummu = aux_->shell(MU).nfunction();
+
+        int thread = 0;
+#ifdef _OPENMP
+        thread = omp_get_thread_num();
+#endif
+
+        for (int NU = 0; NU <= MU; ++NU) {
+            int numnu = aux_->shell(NU).nfunction();
+
+            Jint[thread]->compute_shell(MU, 0, NU, 0);
+            Jbuffer[thread] = Jint[thread]->buffer();
+
+            int index = 0;
+            for (int mu = 0; mu < nummu; ++mu) {
+                int omu = aux_->shell(MU).function_index() + mu;
+
+                for (int nu = 0; nu < numnu; ++nu, ++index) {
+                    int onu = aux_->shell(NU).function_index() + nu;
+
+                    W[omu][onu] = Jbuffer[thread][index];
+                    W[onu][omu] = Jbuffer[thread][index];
+                }
+            }
+        }
+    }
+
+    if (is_poisson_) {
+        // == (AB) Block == //
+        IntegralFactory rifactory_RP(pois_, aux_, zero, zero);
+        std::vector<const double*> Obuffer(nthread);
+        std::vector<std::shared_ptr<OneBodyAOInt>> Oint(nthread);
+        for (int Q = 0; Q < nthread; Q++) {
+            Oint[Q] = std::shared_ptr<OneBodyAOInt>(rifactory_RP.ao_overlap());
+            Obuffer[Q] = Oint[Q]->buffers()[0];
+        }
+
+#pragma omp parallel for schedule(dynamic) num_threads(nthread)
+        for (int NU = 0; NU < pois_->nshell(); ++NU) {
+            int numnu = pois_->shell(NU).nfunction();
+
+            int thread = 0;
+#ifdef _OPENMP
+            thread = omp_get_thread_num();
+#endif
+
+            for (int MU = 0; MU < aux_->nshell(); ++MU) {
+                int nummu = aux_->shell(MU).nfunction();
+
+                Oint[thread]->compute_shell(NU, MU);
+
+                int index = 0;
+                for (int nu = 0; nu < numnu; ++nu) {
+                    int onu = pois_->shell(NU).function_index() + nu;
+
+                    for (int mu = 0; mu < nummu; ++mu, ++index) {
+                        int omu = aux_->shell(MU).function_index() + mu;
+
+                        W[omu][onu + ngaussian] = Obuffer[thread][index];
+                        W[onu + ngaussian][omu] = Obuffer[thread][index];
+                    }
+                }
+            }
+        }
+
+        // == (A|T|B) Block == //
+        IntegralFactory rifactory_P(pois_, pois_, zero, zero);
+        std::vector<const double*> Tbuffer(nthread);
+        std::vector<std::shared_ptr<OneBodyAOInt>> Tint(nthread);
+        for (int Q = 0; Q < nthread; Q++) {
+            Tint[Q] = std::shared_ptr<OneBodyAOInt>(rifactory_P.ao_kinetic());
+            Tbuffer[Q] = Tint[Q]->buffers()[0];
+        }
+
+#pragma omp parallel for schedule(dynamic) num_threads(nthread)
+        for (int MU = 0; MU < pois_->nshell(); ++MU) {
+            int nummu = pois_->shell(MU).nfunction();
+
+            int thread = 0;
+#ifdef _OPENMP
+            thread = omp_get_thread_num();
+#endif
+
+            for (int NU = 0; NU <= MU; ++NU) {
+                int numnu = pois_->shell(NU).nfunction();
+
+                Tint[thread]->compute_shell(MU, NU);
+
+                int index = 0;
+                for (int mu = 0; mu < nummu; ++mu) {
+                    int omu = pois_->shell(MU).function_index() + mu;
+
+                    for (int nu = 0; nu < numnu; ++nu, ++index) {
+                        int onu = pois_->shell(NU).function_index() + nu;
+
+                        // These integrals are (A | -1/2 \nabla^2 | B), and should be (A | - 1 / (4 * pi) \nabla^2 |B)
+                        // So a factor of 1 / (2 * PI) is the difference
+                        W[omu + ngaussian][onu + ngaussian] = 1.0 / (2.0 * M_PI) * Tbuffer[thread][index];
+                        W[onu + ngaussian][omu + ngaussian] = 1.0 / (2.0 * M_PI) * Tbuffer[thread][index];
+                    }
+                }
+            }
+        }
+    }
+
+    // If C1, form indexing and exit immediately (multiplying by 1 is not so gratifying)
+    if (auxpet->nirrep() == 1 || force_C1_ == true) {
+        metric_ = AOmetric;
+        metric_->set_name("SO Basis Fitting Metric");
+        pivots_ = std::make_shared<IntVector>(naux);
+        rev_pivots_ = std::make_shared<IntVector>(naux);
+        int* piv = pivots_->pointer();
+        int* rpiv = pivots_->pointer();
+        for (int Q = 0; Q < naux; Q++) {
+            piv[Q] = Q;
+            rpiv[Q] = Q;
+        }
+        return;
+    }
+
+    // Get the similarity transform objects
+    SharedMatrix auxAO2USO(auxpet->sotoao());
+    // auxAO2USO->print();
+    SharedMatrix poisAO2USO;
+    if (is_poisson_) {
+        poisAO2USO = SharedMatrix(poispet->sotoao());
+        // poisAO2USO->print();
+    }
+
+    // Allocate the fitting metric
+    metric_ = std::make_shared<Matrix>("SO Basis Fitting Metric", nauxpi, nauxpi);
+    SharedMatrix Temp;
+    double** Temp1;
+
+    // Transform AO to SO
+    for (int h = 0; h < auxpet->nirrep(); h++) {
+        // Gaussian-Gaussian part
+        double** J = metric_->pointer(h);
+        double** auxU = auxAO2USO->pointer(h);
+
+        if (ngauspi[h] != 0) {
+            Temp = std::make_shared<Matrix>("Temp", ngauspi[h], ngaussian);
+            Temp1 = Temp->pointer();
+            C_DGEMM('N', 'N', ngauspi[h], ngaussian, ngaussian, 1.0, auxU[0], ngaussian, W[0], naux, 0.0, Temp1[0],
+                    ngaussian);
+            C_DGEMM('N', 'T', ngauspi[h], ngauspi[h], ngaussian, 1.0, Temp1[0], ngaussian, auxU[0], ngaussian, 0.0,
+                    J[0], nauxpi[h]);
+            Temp.reset();
+        }
+
+        if (is_poisson_ && poispet->SO_basisdim()[h] != 0) {
+            Dimension npoispi = poispet->SO_basisdim();
+            double** poisU = poisAO2USO->pointer(h);
+
+            // Gaussian-Poisson part
+            if (ngauspi[h] != 0) {
+                Temp = std::make_shared<Matrix>("Temp", ngauspi[h], npoisson);
+                Temp1 = Temp->pointer();
+                C_DGEMM('N', 'N', ngauspi[h], npoisson, ngaussian, 1.0, auxU[0], ngaussian, &W[0][ngaussian], naux, 0.0,
+                        Temp1[0], npoisson);
+                C_DGEMM('N', 'T', ngauspi[h], npoispi[h], npoisson, 1.0, Temp1[0], npoisson, poisU[0], npoisson, 0.0,
+                        &J[0][ngauspi[h]], nauxpi[h]);
+                for (int Q = 0; Q < ngauspi[h]; Q++)
+                    for (int P = 0; P < npoispi[h]; P++) J[P + ngauspi[h]][Q] = J[Q][P + ngauspi[h]];
+                Temp.reset();
+            }
+
+            // Poisson-Poisson part
+            size_t AOoffset = ngaussian * (size_t)naux + (size_t)ngaussian;
+            size_t SOoffset = ngauspi[h] * (size_t)nauxpi[h] + (size_t)ngauspi[h];
+            Temp = std::make_shared<Matrix>("Temp", npoispi[h], npoisson);
+            Temp1 = Temp->pointer();
+            C_DGEMM('N', 'N', npoispi[h], npoisson, npoisson, 1.0, poisU[0], npoisson, &W[0][AOoffset], naux, 0.0,
+                    Temp1[0], npoisson);
+            C_DGEMM('N', 'T', npoispi[h], npoispi[h], npoisson, 1.0, Temp1[0], npoisson, poisU[0], npoisson, 0.0,
+                    &J[0][SOoffset], nauxpi[h]);
+            Temp.reset();
+        }
+    }
+
+    // Form indexing
+    pivots_ = std::make_shared<IntVector>(nauxpi);
+    rev_pivots_ = std::make_shared<IntVector>(nauxpi);
+    for (int h = 0; h < auxpet->nirrep(); h++) {
+        int* piv = pivots_->pointer(h);
+        int* rpiv = pivots_->pointer(h);
+        for (int Q = 0; Q < nauxpi[h]; Q++) {
+            piv[Q] = Q;
+            rpiv[Q] = Q;
+        }
+    }
+}
+
 void FittingMetric::form_cholesky_inverse() {
     is_inverted_ = true;
     algorithm_ = "CHOLESKY";
@@ -436,6 +685,16 @@ void FittingMetric::form_full_eig_inverse(double tol) {
     metric_->power(-1.0, tol);
     metric_->set_name("SO Basis Fitting Inverse (Eig)");
 }
+/// SL test: for LT-DSRG test in forte.
+void FittingMetric::form_full_eig_inverse_erfc(double tol) {
+    is_inverted_ = true;
+    algorithm_ = "EIG";
+
+    form_erfc_fitting_metric();
+    metric_->power(-1.0, tol);
+    metric_->set_name("SO Basis Fitting Inverse (Eig)");
+}
+
 void FittingMetric::form_full_inverse() {
     is_inverted_ = true;
     algorithm_ = "FULL";

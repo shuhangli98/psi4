@@ -31,7 +31,7 @@ set DFT_OMEGA 0.3
 energyA, wfnA = energy("wB97", molecule=monomerA, return_wfn=True)
 
 # Run the second monomer
-set DFT_OMEGA 0.4
+set DFT_OMEGA 0.4 
 energyB, wfnB = energy("wB97", molecule=monomerB, return_wfn=True)
 
 # Build a blank dimer wavefunction

@@ -291,6 +291,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- PE boolean for polarizable embedding module -*/
     options.add_bool("PE", false);
 
+    ///Shuhang Li test for erfc attenuated DF tensor
+    options.add_str("METRIC", "NONE", "NONE ERFC");
+
     if (name == "PCM" || options.read_globals()) {
         /*- MODULEDESCRIPTION Performs polarizable continuum model (PCM) computations. -*/
 
