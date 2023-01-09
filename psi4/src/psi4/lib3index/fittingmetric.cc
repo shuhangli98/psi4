@@ -319,7 +319,7 @@ void FittingMetric::form_fitting_metric() {
     }
 }
 
-void FittingMetric::form_erfc_fitting_metric() {
+void FittingMetric::form_erfc_fitting_metric(double Omega) {
     is_inverted_ = false;
     algorithm_ = "NONE";
 
@@ -367,9 +367,9 @@ void FittingMetric::form_erfc_fitting_metric() {
     std::vector<const double*> Jbuffer(nthread);  
     std::vector<std::shared_ptr<TwoBodyAOInt>> Jint(nthread);
 
-    /// SL test: Use omega = 0.1 for LT-DSRG test in forte.
+    /// SL test: for LT-DSRG test in forte.
     for (int Q = 0; Q < nthread; Q++) {     
-        Jint[Q] = std::shared_ptr<TwoBodyAOInt>(rifactory_J.erf_complement_eri(0.1));
+        Jint[Q] = std::shared_ptr<TwoBodyAOInt>(rifactory_J.erf_complement_eri(Omega));
     }
 
 #pragma omp parallel for schedule(dynamic) num_threads(nthread)
@@ -686,11 +686,11 @@ void FittingMetric::form_full_eig_inverse(double tol) {
     metric_->set_name("SO Basis Fitting Inverse (Eig)");
 }
 /// SL test: for LT-DSRG test in forte.
-void FittingMetric::form_full_eig_inverse_erfc(double tol) {
+void FittingMetric::form_full_eig_inverse_erfc(double Omega, double tol) {
     is_inverted_ = true;
     algorithm_ = "EIG";
 
-    form_erfc_fitting_metric();
+    form_erfc_fitting_metric(Omega);
     metric_->power(-1.0, tol);
     metric_->set_name("SO Basis Fitting Inverse (Eig)");
 }

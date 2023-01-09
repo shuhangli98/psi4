@@ -104,8 +104,8 @@ class PSI_API FittingMetric {
     void form_fitting_metric();
 
     /// SL test: Build the fitting metric with erfc attenuated coulomb operator.
-    void form_erfc_fitting_metric();
-    void form_full_eig_inverse_erfc(double tol = 1.0E-10);
+    void form_erfc_fitting_metric(double Omega);
+    void form_full_eig_inverse_erfc(double Omega, double tol = 1.0E-10);
 
     /// Build the Cholesky half inverse metric (calls form_fitting_metric)
     void form_cholesky_inverse();
