@@ -1567,6 +1567,307 @@ void DiskDFJK::initialize_wK_disk() {
     psio_->write_entry(unit_, "Omega", (char*)&omega_, sizeof(double));
     psio_->close(unit_, 1);
 }
+
+void DiskDFJK::erfc_three_disk(double forte_omega) {
+    // Setup integral objects
+    eri_.clear();
+    std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
+    std::shared_ptr<IntegralFactory> rifactory =
+        std::make_shared<IntegralFactory>(auxiliary_, zero, primary_, primary_);
+    eri_.emplace_back(rifactory->eri());
+    for (int Q = 1; Q < df_ints_num_threads_; Q++) {
+        eri_.emplace_back(eri_.front()->clone());
+    }
+    n_function_pairs_ = eri_.front()->function_pairs().size();
+    // Setup erfc integrals. Still use erf_eri_.
+    erf_eri_.clear();
+    erf_eri_.emplace_back(rifactory->erf_complement_eri(forte_omega));
+    for (int Q = 1; Q < df_ints_num_threads_; Q++) {
+        erf_eri_.emplace_back(erf_eri_.front()->clone());
+    }
+
+    int nshell = primary_->nshell();
+    int naux = auxiliary_->nbf();
+
+    // ==> Schwarz Indexing <== //
+    const std::vector<std::pair<int, int> >& schwarz_shell_pairs = eri_.front()->shell_pairs();
+    const std::vector<std::pair<int, int> >& schwarz_fun_pairs = eri_.front()->function_pairs();
+    int nshellpairs = schwarz_shell_pairs.size();
+    const std::vector<long int>& schwarz_shell_pairs_r = eri_.front()->shell_pairs_to_dense();
+    const std::vector<long int>& schwarz_fun_pairs_r = eri_.front()->function_pairs_to_dense();
+
+    // ==> Memory Sizing <== //
+    size_t two_memory = ((size_t)auxiliary_->nbf()) * auxiliary_->nbf();
+    size_t buffer_memory =
+        (memory_ > 2 * two_memory) ? memory_ - 2 * two_memory : 0;  // Two is for buffer space in fitting
+
+    // outfile->Printf( "Buffer memory = %ld words\n", buffer_memory);
+
+    // outfile->Printf("Schwarz Shell Pairs:\n");
+    // for (int MN = 0; MN < nshellpairs; MN++) {
+    //    outfile->Printf("  %3d: (%3d,%3d)\n", MN, schwarz_shell_pairs[2*MN], schwarz_shell_pairs[2*MN + 1]);
+    //}
+
+    // outfile->Printf("Schwarz Function Pairs:\n");
+    // for (int MN = 0; MN < ntri; MN++) {
+    //    outfile->Printf("  %3d: (%3d,%3d)\n", MN, schwarz_fun_pairs[2*MN], schwarz_fun_pairs[2*MN + 1]);
+    //}
+
+    // outfile->Printf("Schwarz Reverse Shell Pairs:\n");
+    // for (int MN = 0; MN < primary_->nshell() * (primary_->nshell() + 1) / 2; MN++) {
+    //    outfile->Printf("  %3d: %4ld\n", MN, schwarz_shell_pairs_r[MN]);
+    //}
+
+    // outfile->Printf("Schwarz Reverse Function Pairs:\n");
+    // for (int MN = 0; MN < primary_->nbf() * (primary_->nbf() + 1) / 2; MN++) {
+    //    outfile->Printf("  %3d: %4ld\n", MN, schwarz_fun_pairs_r[MN]);
+    //}
+
+    // Find out exactly how much memory per MN shell
+    auto MN_mem = std::make_shared<IntVector>("Memory per MN pair", nshell * (nshell + 1) / 2);
+    int* MN_memp = MN_mem->pointer();
+
+    for (int mn = 0; mn < n_function_pairs_; mn++) {
+        int m = schwarz_fun_pairs[mn].first;
+        int n = schwarz_fun_pairs[mn].second;
+
+        int M = primary_->function_to_shell(m);
+        int N = primary_->function_to_shell(n);
+        size_t addr = M > N ? M * (M + 1) / 2 + N : N * (N + 1) / 2 + M;
+        MN_memp[addr] += naux;
+    }
+
+    // MN_mem->print(outfile);
+
+    // Figure out exactly how much memory per M row
+    size_t* M_memp = new size_t[nshell];
+    memset(static_cast<void*>(M_memp), '\0', nshell * sizeof(size_t));
+
+    for (int M = 0; M < nshell; M++) {
+        for (int N = 0; N <= M; N++) {
+            M_memp[M] += MN_memp[M * (M + 1) / 2 + N];
+        }
+    }
+
+    // outfile->Printf("  # Memory per M row #\n\n");
+    // for (int M = 0; M < nshell; M++)
+    //    outfile->Printf("   %3d: %10ld\n", M+1,M_memp[M]);
+    // outfile->Printf("\n");
+
+    // Find and check the minimum required memory for this problem
+    size_t min_mem = naux * (size_t)n_function_pairs_;
+    for (int M = 0; M < nshell; M++) {
+        if (min_mem > M_memp[M]) min_mem = M_memp[M];
+    }
+
+    if (min_mem > buffer_memory) {
+        std::stringstream message;
+        message << "SCF::DF: Disk based algorithm requires 2 (A|B) fitting metrics and an (A|mn) chunk on core."
+                << std::endl;
+        message << "         This is 2Q^2 + QNP doubles, where Q is the auxiliary basis size, N is the" << std::endl;
+        message << "         primary basis size, and P is the maximum number of functions in a primary shell."
+                << std::endl;
+        message << "         For this problem, that is " << ((8L * (min_mem + 2 * two_memory)))
+                << " bytes before taxes,";
+        message << ((80L * (min_mem + 2 * two_memory) / 7L)) << " bytes after taxes. " << std::endl;
+
+        throw PSIEXCEPTION(message.str());
+    }
+
+    // ==> Reduced indexing by M <== //
+
+    // Figure out the MN start index per M row
+    auto MN_start = std::make_shared<IntVector>("MUNU start per M row", nshell);
+    int* MN_startp = MN_start->pointer();
+
+    MN_startp[0] = schwarz_shell_pairs_r[0];
+    int M_index = 1;
+    for (int MN = 0; MN < nshellpairs; MN++) {
+        if (std::max(schwarz_shell_pairs[MN].first, schwarz_shell_pairs[MN].second) == M_index) {
+            MN_startp[M_index] = MN;
+            M_index++;
+        }
+    }
+
+    // Figure out the mn start index per M row
+    auto mn_start = std::make_shared<IntVector>("munu start per M row", nshell);
+    int* mn_startp = mn_start->pointer();
+
+    mn_startp[0] = schwarz_fun_pairs[0].first;
+    int m_index = 1;
+    for (int mn = 0; mn < n_function_pairs_; mn++) {
+        if (primary_->function_to_shell(schwarz_fun_pairs[mn].first) == m_index) {
+            mn_startp[m_index] = mn;
+            m_index++;
+        }
+    }
+
+    // Figure out the MN columns per M row
+    auto MN_col = std::make_shared<IntVector>("MUNU cols per M row", nshell);
+    int* MN_colp = MN_col->pointer();
+
+    for (int M = 1; M < nshell; M++) {
+        MN_colp[M - 1] = MN_startp[M] - MN_startp[M - 1];
+    }
+    MN_colp[nshell - 1] = nshellpairs - MN_startp[nshell - 1];
+
+    // Figure out the mn columns per M row
+    auto mn_col = std::make_shared<IntVector>("munu cols per M row", nshell);
+    int* mn_colp = mn_col->pointer();
+
+    for (int M = 1; M < nshell; M++) {
+        mn_colp[M - 1] = mn_startp[M] - mn_startp[M - 1];
+    }
+    mn_colp[nshell - 1] = n_function_pairs_ - mn_startp[nshell - 1];
+
+    // MN_start->print(outfile);
+    // MN_col->print(outfile);
+    // mn_start->print(outfile);
+    // mn_col->print(outfile);
+
+    // ==> Block indexing <== //
+    // Sizing by block
+    std::vector<int> MN_start_b;
+    std::vector<int> MN_col_b;
+    std::vector<int> mn_start_b;
+    std::vector<int> mn_col_b;
+
+    // Determine MN and mn block starts
+    // also MN and mn block cols
+    int nblock = 1;
+    size_t current_mem = 0L;
+    MN_start_b.push_back(0);
+    mn_start_b.push_back(0);
+    MN_col_b.push_back(0);
+    mn_col_b.push_back(0);
+    for (int M = 0; M < nshell; M++) {
+        if (current_mem + M_memp[M] > buffer_memory) {
+            MN_start_b.push_back(MN_startp[M]);
+            mn_start_b.push_back(mn_startp[M]);
+            MN_col_b.push_back(0);
+            mn_col_b.push_back(0);
+            nblock++;
+            current_mem = 0L;
+        }
+        MN_col_b[nblock - 1] += MN_colp[M];
+        mn_col_b[nblock - 1] += mn_colp[M];
+        current_mem += M_memp[M];
+    }
+
+    outfile->Printf("\n    memory success ");
+
+    // outfile->Printf("Block, MN start, MN cols, mn start, mn cols\n");
+    // for (int block = 0; block < nblock; block++) {
+    //    outfile->Printf("  %3d: %12d %12d %12d %12d\n", block, MN_start_b[block], MN_col_b[block], mn_start_b[block],
+    //    mn_col_b[block]);
+    //}
+    //
+
+    // Full sizing not required any longer
+    MN_mem.reset();
+    MN_start.reset();
+    MN_col.reset();
+    mn_start.reset();
+    mn_col.reset();
+    delete[] M_memp;
+
+    // ==> Buffer allocation <== //
+    int max_cols = 0;
+    for (int block = 0; block < nblock; block++) {
+        if (max_cols < mn_col_b[block]) max_cols = mn_col_b[block];
+    }
+
+    // Primary buffer
+    Qmn_ = std::make_shared<Matrix>("(Q|mn) (Disk Chunk)", naux, max_cols);
+    double** Qmnp = Qmn_->pointer();
+
+    psio_->open(unit_, PSIO_OPEN_NEW);
+    auto aio = std::make_shared<AIOHandler>(psio_);
+
+    // Dispatch the prestripe
+    aio->zero_disk(unit_, "(Q|mn) Integrals", naux, n_function_pairs_);
+
+    // Synch up
+    aio->synchronize();
+
+    outfile->Printf("\n    aio success ");
+
+    // ==> Thread setup <== //
+    int nthread = 1;
+#ifdef _OPENMP
+    nthread = df_ints_num_threads_;
+#endif
+
+    // ==> Main loop <== //
+    for (int block = 0; block < nblock; block++) {
+        int MN_start_val = MN_start_b[block];
+        int mn_start_val = mn_start_b[block];
+        int MN_col_val = MN_col_b[block];
+        int mn_col_val = mn_col_b[block];
+
+        // ==> (A|mn) integrals <== //
+
+        timer_on("JK: (A|mn)");
+
+#pragma omp parallel for schedule(guided) num_threads(nthread)
+        for (int MUNU = MN_start_val; MUNU < MN_start_val + MN_col_val; MUNU++) {
+            int rank = 0;
+#ifdef _OPENMP
+            rank = omp_get_thread_num();
+#endif
+            const auto &buffers = erf_eri_[rank]->buffers();
+            int MU = schwarz_shell_pairs[MUNU + 0].first;
+            int NU = schwarz_shell_pairs[MUNU + 0].second;
+            int nummu = primary_->shell(MU).nfunction();
+            int numnu = primary_->shell(NU).nfunction();
+            int mu = primary_->shell(MU).function_index();
+            int nu = primary_->shell(NU).function_index();
+            for (int P = 0; P < auxiliary_->nshell(); P++) {
+                int nump = auxiliary_->shell(P).nfunction();
+                int p = auxiliary_->shell(P).function_index();
+                erf_eri_[rank]->compute_shell(P, 0, MU, NU);
+                const auto *buffer = buffers[0];
+                for (int dm = 0; dm < nummu; dm++) {
+                    int omu = mu + dm;
+                    for (int dn = 0; dn < numnu; dn++) {
+                        int onu = nu + dn;
+                        size_t addr = omu > onu ? omu * (omu + 1) / 2 + onu :
+                                                  onu * (onu + 1) / 2 + omu;
+                        if (schwarz_fun_pairs_r[addr] >= 0) {
+                            int delta = schwarz_fun_pairs_r[addr] - mn_start_val;
+                            for (int dp = 0; dp < nump; dp++) {
+                                int op = p + dp;
+                                Qmnp[op][delta] = buffer[dp * nummu * numnu + dm * numnu + dn];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        timer_off("JK: (A|mn)");
+
+        outfile->Printf("\n    compute success ");
+
+        timer_on("SL_Disk: Saving AO");
+
+        outfile->Printf("Shuhang Li test: Saving erfc three integral in unit %d (in disk, not in core) \n", unit_);
+        psio_address addr;
+        for (int Q = 0; Q < naux; Q++) {
+            addr = psio_get_address(PSIO_ZERO, (Q * (size_t)n_function_pairs_ + mn_start_val) * sizeof(double));
+            psio_->write(unit_, "ERFC Integrals", (char*)Qmnp[Q], mn_col_val * sizeof(double), addr, &addr);
+        }
+
+        timer_off("SL_Disk: Saving AO");
+    }
+
+    // ==> Close out <== //
+    Qmn_.reset();
+
+    psio_->close(unit_, 1);
+}
+
+
 void DiskDFJK::rebuild_wK_disk() {
     // Already open
     outfile->Printf("    Rebuilding (Q|w|mn) Integrals (new omega)\n\n");

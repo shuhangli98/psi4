@@ -1062,6 +1062,10 @@ class PSI_API DiskDFJK : public JK {
     * type on output file
     */
     void print_header() const override;
+
+    // Test for Forte
+    void erfc_three_disk(double forte_omega);
+
 };
 /**
  * Class CDJK
