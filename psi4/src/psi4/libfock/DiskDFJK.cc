@@ -1785,7 +1785,7 @@ void DiskDFJK::erfc_three_disk(double forte_omega) {
     auto aio = std::make_shared<AIOHandler>(psio_);
 
     // Dispatch the prestripe
-    aio->zero_disk(unit_, "(Q|mn) Integrals", naux, n_function_pairs_);
+    aio->zero_disk(unit_, "ERFC Integrals", naux, n_function_pairs_);
 
     // Synch up
     aio->synchronize();
