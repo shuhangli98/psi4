@@ -891,23 +891,6 @@ void DiskDFJK::initialize_JK_disk() {
 
     timer_off("JK: (A|Q)^-1/2");
 
-    // Shuhang Li test: Fitting full inverse metric
-    timer_on("SL_JK (in disk): (A|Q)^-1");
-
-    auto Jinv_full = std::make_shared<FittingMetric>(auxiliary_, true);
-    Jinv_full->form_full_eig_inverse(condition_);
-    double** Jinv_fullp = Jinv_full->get_metric()->pointer();
-
-    timer_off("SL_JK (in disk): (A|Q)^-1");
-
-    // Save inverse metric to the SCF three-index integral file if it exists
-    timer_on("SL(in disk): Saving full inverse metric");
-
-    outfile->Printf("Shuhang Li test: Saving full inverse metric in unit %d (in disk, not in core) \n", unit_);
-    psio_->write_entry(unit_, "Jinv_full", (char*)Jinv_fullp[0], sizeof(double) * auxiliary_->nbf() * auxiliary_->nbf());
-
-    timer_off("SL(in disk): Saving full inverse metric");
-
     // ==> Thread setup <== //
     int nthread = 1;
 #ifdef _OPENMP
@@ -963,16 +946,7 @@ void DiskDFJK::initialize_JK_disk() {
 
         timer_off("JK: (A|mn)");
 
-        timer_on("SL_Disk: Saving AO");
-
-        outfile->Printf("Shuhang Li test: Saving AO basis DF tensor in unit %d (in disk, not in core) \n", unit_);
         psio_address addr;
-        for (int Q = 0; Q < naux; Q++) {
-            addr = psio_get_address(PSIO_ZERO, (Q * (size_t)n_function_pairs_ + mn_start_val) * sizeof(double));
-            psio_->write(unit_, "(A|mn) Integrals", (char*)Qmnp[Q], mn_col_val * sizeof(double), addr, &addr);
-        }
-
-        timer_off("SL_Disk: Saving AO");
 
         // ==> (Q|mn) fitting <== //
 
@@ -1597,11 +1571,11 @@ void DiskDFJK::erfc_three_disk(double forte_omega) {
     const std::vector<long int>& schwarz_fun_pairs_r = eri_.front()->function_pairs_to_dense();
 
     // ==> Memory Sizing <== //
-    size_t two_memory = ((size_t)auxiliary_->nbf()) * auxiliary_->nbf();
-    size_t buffer_memory =
-        (memory_ > 2 * two_memory) ? memory_ - 2 * two_memory : 0;  // Two is for buffer space in fitting
+    size_t two_memory = 0; // no need to store metric.
+    size_t buffer_memory = memory_;
+        //(memory_ > 2 * two_memory) ? memory_ - 2 * two_memory : 0;  // Two is for buffer space in fitting
 
-    // outfile->Printf( "Buffer memory = %ld words\n", buffer_memory);
+    outfile->Printf( "Buffer memory = %ld words\n", buffer_memory);
 
     // outfile->Printf("Schwarz Shell Pairs:\n");
     // for (int MN = 0; MN < nshellpairs; MN++) {
@@ -1660,19 +1634,19 @@ void DiskDFJK::erfc_three_disk(double forte_omega) {
         if (min_mem > M_memp[M]) min_mem = M_memp[M];
     }
 
-    if (min_mem > buffer_memory) {
-        std::stringstream message;
-        message << "SCF::DF: Disk based algorithm requires 2 (A|B) fitting metrics and an (A|mn) chunk on core."
-                << std::endl;
-        message << "         This is 2Q^2 + QNP doubles, where Q is the auxiliary basis size, N is the" << std::endl;
-        message << "         primary basis size, and P is the maximum number of functions in a primary shell."
-                << std::endl;
-        message << "         For this problem, that is " << ((8L * (min_mem + 2 * two_memory)))
-                << " bytes before taxes,";
-        message << ((80L * (min_mem + 2 * two_memory) / 7L)) << " bytes after taxes. " << std::endl;
+    // if (min_mem > buffer_memory) {
+    //     std::stringstream message;
+    //     message << "SCF::DF: Disk based algorithm requires 2 (A|B) fitting metrics and an (A|mn) chunk on core."
+    //             << std::endl;
+    //     message << "         This is 2Q^2 + QNP doubles, where Q is the auxiliary basis size, N is the" << std::endl;
+    //     message << "         primary basis size, and P is the maximum number of functions in a primary shell."
+    //             << std::endl;
+    //     message << "         For this problem, that is " << ((8L * (min_mem + 2 * two_memory)))
+    //             << " bytes before taxes,";
+    //     message << ((80L * (min_mem + 2 * two_memory) / 7L)) << " bytes after taxes. " << std::endl;
 
-        throw PSIEXCEPTION(message.str());
-    }
+    //     throw PSIEXCEPTION(message.str());
+    // }
 
     // ==> Reduced indexing by M <== //
 
@@ -1839,6 +1813,8 @@ void DiskDFJK::erfc_three_disk(double forte_omega) {
                                 int op = p + dp;
                                 Qmnp[op][delta] = buffer[dp * nummu * numnu + dm * numnu + dn];
                             }
+                        } else {
+                            outfile->Printf("\n    DISKWRONG ");
                         }
                     }
                 }
