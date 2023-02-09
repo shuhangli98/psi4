@@ -1,0 +1,12 @@
+2022-12-09:16:06:56,292 INFO     [psi4.driver.task_planner:283] PLANNING Atomic:  keywords={'DFT_RADIAL_POINTS': 99, 'DFT_SPHERICAL_POINTS': 302, 'POINTS': 5, 'SCF_TYPE': 'DF', 'forte__scf_type': 'DF', 'forte__basis': 'CC-PVDZ', 'function_kwargs': {}}
+2022-12-09:16:06:56,294 INFO     [psi4.driver.driver:637] Compute gradient(): method=wb97x-d, basis=cc-pvdz, molecule=default, nre=23.669879324124548
+2022-12-09:16:06:57,556 INFO     [psi4.driver.driver:640] Return gradient(): -93.39299734849307
+2022-12-09:16:06:57,556 INFO     [psi4.driver.driver:641] [[-0.00199857  0.02983872  0.        ]
+ [ 0.00246027 -0.0368775   0.        ]
+ [-0.0004579   0.00698004  0.        ]]
+2022-12-09:16:06:57,572 INFO     [psi4.driver.task_planner:283] PLANNING Atomic:  keywords={'DFT_RADIAL_POINTS': 99, 'DFT_SPHERICAL_POINTS': 302, 'SCF__INTS_TOLERANCE': 1e-12, 'POINTS': 5, 'SCF_TYPE': 'PK', 'forte__scf_type': 'PK', 'forte__basis': 'CC-PVDZ', 'function_kwargs': {}}
+2022-12-09:16:06:57,573 INFO     [psi4.driver.driver:637] Compute gradient(): method=wb97x-d, basis=cc-pvdz, molecule=default, nre=23.669879324124548
+2022-12-09:16:06:58,840 INFO     [psi4.driver.driver:640] Return gradient(): -93.3929079809417
+2022-12-09:16:06:58,840 INFO     [psi4.driver.driver:641] [[-0.00200096  0.029874    0.        ]
+ [ 0.00246381 -0.03692957  0.        ]
+ [-0.00045906  0.00699687  0.        ]]

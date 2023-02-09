@@ -1,0 +1,2 @@
+2022-10-24:20:06:07,468 INFO     [psi4.driver.task_planner:283] PLANNING Atomic:  keywords={'E_CONVERGENCE': 1e-08, 'SCF_TYPE': 'DF', 'forte__scf_type': 'DF', 'forte__e_convergence': 1e-08, 'forte__basis': 'CC-PVTZ', 'function_kwargs': {}}
+2022-10-24:20:06:07,471 INFO     [psi4.driver.driver:524] Compute energy(): method=cam-b3lyp, basis=cc-pvtz, molecule=h2o, nre=8.801465564567374

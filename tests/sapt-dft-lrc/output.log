@@ -1,0 +1,6 @@
+2022-12-09:16:23:31,839 INFO     [psi4.driver.task_planner:283] PLANNING Atomic:  keywords={'DFT_OMEGA': 0.3, 'SAPT_DFT_EXCH_DISP_SCALE_SCHEME': 'NONE', 'SCF_TYPE': 'DF', 'forte__scf_type': 'DF', 'forte__basis': 'AUG-CC-PVDZ', 'function_kwargs': {}}
+2022-12-09:16:23:31,841 INFO     [psi4.driver.driver:524] Compute energy(): method=wb97, basis=aug-cc-pvdz, molecule=monomerA, nre=0.0
+2022-12-09:16:23:32,369 INFO     [psi4.driver.driver:527] Return energy(): -128.9090092294814
+2022-12-09:16:23:32,384 INFO     [psi4.driver.task_planner:283] PLANNING Atomic:  keywords={'DFT_OMEGA': 0.4, 'SCF__INTS_TOLERANCE': 1e-12, 'SAPT_DFT_EXCH_DISP_SCALE_SCHEME': 'NONE', 'SCF_TYPE': 'DF', 'forte__scf_type': 'DF', 'forte__basis': 'AUG-CC-PVDZ', 'function_kwargs': {}}
+2022-12-09:16:23:32,386 INFO     [psi4.driver.driver:524] Compute energy(): method=wb97, basis=aug-cc-pvdz, molecule=monomerB, nre=0.0
+2022-12-09:16:23:32,806 INFO     [psi4.driver.driver:527] Return energy(): -527.5342965810809
